@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { OAuthManager } from './oauth/manager.js';
 import { NetSuiteMCPTools } from './mcp/tools.js';
+import { generateNetSuiteUrl } from './utils/netsuiteUrls.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -97,9 +98,35 @@ class NetSuiteMCPServer {
         console.error('✅ Authenticated - fetching NetSuite tools');
         const tools = await this.mcpTools.fetchTools();
 
-        // Add logout and cache refresh tools to the list
+        // Add logout, cache refresh, and link generator tools to the list
         const allTools = [
           ...tools,
+          {
+            name: 'netsuite_get_record_link',
+            description: 'Generate a direct NetSuite UI browser link to view/access a specific record in NetSuite. Useful when you need to see the real page for a transaction or record.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                recordId: {
+                  type: 'string',
+                  description: 'The internal ID of the record (e.g., 12345)'
+                },
+                recordType: {
+                  type: 'string',
+                  description: 'The record type (e.g., salesorder, customer, invoice, vendor, customrecord_my_custom_type). If omitted, falls back to transaction.'
+                },
+                accountId: {
+                  type: 'string',
+                  description: 'NetSuite Account ID (e.g., 1234567 or 1234567_SB1). If omitted, uses the current authenticated account ID.'
+                },
+                rectype: {
+                  type: 'integer',
+                  description: 'The numeric custom record type ID (e.g., 104). Required only for custom records if you want a direct link, otherwise falls back to the general transaction path.'
+                }
+              },
+              required: ['recordId']
+            }
+          },
           {
             name: 'netsuite_refresh_cache',
             description: 'Force NetSuite to clear and refresh its internal REST session filter set cache. Use this tool if you recently made changes in the NetSuite UI (like adding or modifying records) but other NetSuite tools are still returning old/stale data from before the last login. Calling this will ensure all subsequent queries return the absolute latest data.',
@@ -181,16 +208,62 @@ class NetSuiteMCPServer {
           };
         }
 
+        // Handle record link generation tool
+        if (name === 'netsuite_get_record_link') {
+          const currentAccountId = await this.oauthManager.getAccountId();
+          const targetAccountId = args.accountId || currentAccountId;
+          
+          if (!targetAccountId) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: '❌ Account ID not found. Please authenticate or provide a specified accountId.'
+                }
+              ],
+              isError: true
+            };
+          }
+          
+          const url = generateNetSuiteUrl(targetAccountId, args.recordType, args.recordId, args.rectype);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `🔗 **NetSuite UI Link (${targetAccountId.toUpperCase()}):**\n${url}`
+              }
+            ]
+          };
+        }
+
         // Execute NetSuite tool
         console.error(`\n🔧 Executing NetSuite tool: ${name}`);
         const result = await this.mcpTools.executeTool(name, args);
+
+        let responseText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+
+        // Auto-append URL for record-related tools
+        if (name === 'ns_getRecord' || name === 'ns_createRecord' || name === 'ns_updateRecord') {
+          const recordId = args.id || args.recordId || (result && typeof result === 'object' && (result.id || result.internalId));
+          const recordType = args.recordType || args.type || (result && typeof result === 'object' && (result.type || result.recordType));
+          
+          if (recordId) {
+            const currentAccountId = await this.oauthManager.getAccountId();
+            if (currentAccountId) {
+              const url = generateNetSuiteUrl(currentAccountId, recordType, recordId, args.rectype);
+              if (url) {
+                responseText += `\n\n🔗 **NetSuite UI Link (Current Environment):**\n${url}`;
+              }
+            }
+          }
+        }
 
         // Format result for MCP protocol
         return {
           content: [
             {
               type: 'text',
-              text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+              text: responseText
             }
           ]
         };
