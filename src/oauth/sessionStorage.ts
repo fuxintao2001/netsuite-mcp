@@ -6,6 +6,8 @@ import path from 'path';
  * Handles reading and writing session data to disk
  */
 export class SessionStorage {
+  storagePath: any;
+  sessionFile: any;
   constructor(storagePath) {
     this.storagePath = storagePath;
     this.sessionFile = path.join(storagePath, 'session.json');

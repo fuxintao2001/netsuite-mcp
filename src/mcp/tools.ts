@@ -1,20 +1,24 @@
 import axios from 'axios';
-import fs from 'fs/promises';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { cacheService } from '../utils/cache.js';
 
 /**
  * NetSuite MCP Tools Client
  * Communicates with NetSuite MCP REST API using JSON-RPC 2.0
  */
 export class NetSuiteMCPTools {
-  constructor(oauthManager) {
+  oauthManager: any;
+  toolsCache: any = null;
+  lastToolsFetch: number | null = null;
+  toolsCacheTTL: number = 1000;
+  customRecordMappings: Map<string, number>;
+  hasFetchedMappings: boolean = false;
+
+  constructor(oauthManager: any) {
     this.oauthManager = oauthManager;
-    this.toolsCache = null;
-    this.lastToolsFetch = null;
-    this.toolsCacheTTL = 1000; // 1 second cache for instant updates in development
-    this.customRecordMappings = new Map(); // Store dynamic scriptid -> internalid mapping
-    this.hasFetchedMappings = false; // Prevent infinite recursion on background fetching
+    this.customRecordMappings = new Map();
+    // Load custom record mappings from local cache in background
+    this.loadCustomRecordMappingsCache();
+    this.fetchCustomRecordMappings().catch(() => {});
   }
 
   /**
@@ -29,38 +33,25 @@ export class NetSuiteMCPTools {
   }
 
   /**
-   * Fetch available tools from NetSuite MCP API
-   * Returns tools in MCP protocol format
+   * Fetch available tools from NetSuite
    */
   async fetchTools() {
-    // Load local custom record mappings cache if exists
     try {
-      await this.loadCustomRecordMappingsCache();
-    } catch {}
-
-    // Fetch fresh dynamic custom record mappings in the background
-    this.fetchCustomRecordMappings().catch(() => {});
-
-    // Return cached tools if still valid
-    if (this.toolsCache && this.lastToolsFetch) {
-      const age = Date.now() - this.lastToolsFetch;
-      if (age < this.toolsCacheTTL) {
-        console.error(`📦 Using cached tools (${Math.round(age / 1000)}s old)`);
-        return this.toolsCache;
+      const accountId = await this.oauthManager.getAccountId();
+      if (accountId) {
+        const cachedTools = await cacheService.get(accountId, 'toolsCache');
+        if (cachedTools) {
+          return cachedTools;
+        }
       }
-    }
 
-    const accessToken = await this.oauthManager.ensureValidToken();
-    const endpoint = await this.getMCPEndpoint();
+      const accessToken = await this.oauthManager.ensureValidToken();
+      const endpoint = await this.getMCPEndpoint();
 
-    console.error('🔍 Fetching available tools from NetSuite...');
-
-    try {
       const response = await axios.post(endpoint, {
         jsonrpc: '2.0',
         id: this.generateRequestId(),
-        method: 'tools/list',
-        params: {}
+        method: 'tools/list'
       }, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -69,30 +60,21 @@ export class NetSuiteMCPTools {
           'Pragma': 'no-cache',
           'Expires': '0'
         },
-        timeout: 30000
+        timeout: 30000 // 30 second timeout for tool listing
       });
 
       if (response.data.error) {
         throw new Error(response.data.error.message || 'Failed to fetch tools');
       }
 
-      if (response.data.result && response.data.result.tools) {
-        this.toolsCache = response.data.result.tools;
-        this.lastToolsFetch = Date.now();
-        console.error(`✅ Fetched ${this.toolsCache.length} tools from NetSuite`);
-        return this.toolsCache;
+      const tools = response.data.result.tools || [];
+      if (accountId) {
+        await cacheService.set(accountId, 'toolsCache', tools, 3600); // 1 hour TTL
       }
-
-      return [];
-
-    } catch (error) {
-      if (error.response?.status === 401) {
-        console.error('❌ Authentication failed - token may be expired');
-        throw new Error('NetSuite authentication failed. Please re-authenticate.');
-      }
-
-      console.error('❌ Error fetching tools:', error.response?.data || error.message);
-      throw new Error(`Failed to fetch tools: ${error.message}`);
+      return tools;
+    } catch (error: any) {
+      console.error(`❌ Failed to fetch tools from NetSuite: ${error.message}`);
+      throw error;
     }
   }
 
@@ -106,12 +88,15 @@ export class NetSuiteMCPTools {
     // Intercept metadata tools for schema caching
     if (toolName === 'ns_getSuiteQLMetadata' || toolName === 'ns_getRecordTypeMetadata') {
       try {
-        const cachedResult = await this.readMetadataCache(toolName, parameters);
-        if (cachedResult) {
-          console.error(`⚡ [Cache Hit] Serving ${toolName} for ${parameters?.recordType || 'all'} from local metadata cache`);
-          return cachedResult;
+        const accountId = await this.oauthManager.getAccountId();
+        if (accountId) {
+          const cacheKey = `${toolName}_${parameters?.recordType || 'all'}`;
+          const cachedResult = await cacheService.get(accountId, cacheKey);
+          if (cachedResult) {
+            return cachedResult;
+          }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(`⚠️ Failed to read metadata cache: ${err.message}`);
       }
     }
@@ -153,8 +138,12 @@ export class NetSuiteMCPTools {
       // Save to cache after successful execution
       if (toolName === 'ns_getSuiteQLMetadata' || toolName === 'ns_getRecordTypeMetadata') {
         try {
-          await this.writeMetadataCache(toolName, parameters, result);
-        } catch (err) {
+          const accountId = await this.oauthManager.getAccountId();
+          if (accountId) {
+            const cacheKey = `${toolName}_${parameters?.recordType || 'all'}`;
+            await cacheService.set(accountId, cacheKey, result);
+          }
+        } catch (err: any) {
           console.error(`⚠️ Failed to write metadata cache: ${err.message}`);
         }
       }
@@ -224,7 +213,11 @@ export class NetSuiteMCPTools {
   /**
    * Clear tools cache (useful after re-authentication)
    */
-  clearCache() {
+  async clearCache() {
+    const accountId = await this.oauthManager.getAccountId();
+    if (accountId) {
+      await cacheService.set(accountId, 'toolsCache', null);
+    }
     this.toolsCache = null;
     this.lastToolsFetch = null;
     console.error('🗑️  Tools cache cleared');
@@ -251,8 +244,11 @@ export class NetSuiteMCPTools {
    * Force refresh NetSuite REST session filter set cache
    */
   async refreshSessionCache() {
-    const accessToken = await this.oauthManager.ensureValidToken();
     const accountId = await this.oauthManager.getAccountId();
+    if (accountId) {
+      await cacheService.clearAccountCache(accountId);
+    }
+    const accessToken = await this.oauthManager.ensureValidToken();
     const refreshUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest/v1/session/cache/refresh`;
 
     console.error('🔄 Refreshing NetSuite REST session cache...');
@@ -277,79 +273,14 @@ export class NetSuiteMCPTools {
   }
 
   /**
-   * Get metadata cache file path
-   */
-  async getMetadataCachePath(toolName, parameters) {
-    const accountId = await this.oauthManager.getAccountId();
-    if (!accountId) return null;
-    
-    const recordType = parameters?.recordType ? parameters.recordType.toLowerCase().trim() : 'all';
-    
-    // Resolve project root
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const projectRoot = path.dirname(path.dirname(__dirname));
-    
-    return path.join(projectRoot, '.cache', accountId.toLowerCase().replace(/_/g, '-'), `${toolName}_${recordType}.json`);
-  }
-
-  /**
-   * Read metadata from local cache
-   */
-  async readMetadataCache(toolName, parameters) {
-    try {
-      const cachePath = await this.getMetadataCachePath(toolName, parameters);
-      if (!cachePath) return null;
-
-      const stats = await fs.stat(cachePath);
-      const age = Date.now() - stats.mtimeMs;
-      const ttl = 24 * 60 * 60 * 1000; // 24 hours TTL
-
-      if (age < ttl) {
-        const data = await fs.readFile(cachePath, 'utf-8');
-        return JSON.parse(data);
-      }
-      
-      // Expired cache
-      return null;
-    } catch {
-      return null; // Cache file doesn't exist or error reading
-    }
-  }
-
-  /**
-   * Write metadata to local cache
-   */
-  async writeMetadataCache(toolName, parameters, result) {
-    try {
-      const cachePath = await this.getMetadataCachePath(toolName, parameters);
-      if (!cachePath) return;
-
-      const cacheDir = path.dirname(cachePath);
-      await fs.mkdir(cacheDir, { recursive: true });
-      await fs.writeFile(cachePath, JSON.stringify(result, null, 2), 'utf-8');
-    } catch (err) {
-      console.error(`⚠️ Failed to write cache file: ${err.message}`);
-    }
-  }
-
-  /**
    * Clear metadata cache for current account
    */
   async clearMetadataCache() {
     try {
       const accountId = await this.oauthManager.getAccountId();
       if (!accountId) return;
-
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = path.dirname(__filename);
-      const projectRoot = path.dirname(path.dirname(__dirname));
-      
-      const accountCacheDir = path.join(projectRoot, '.cache', accountId.toLowerCase().replace(/_/g, '-'));
-      
-      await fs.rm(accountCacheDir, { recursive: true, force: true });
-      console.error(`🗑️ Metadata cache cleared for account ${accountId}`);
-    } catch (err) {
+      await cacheService.clearAccountCache(accountId);
+    } catch (err: any) {
       console.error(`⚠️ Failed to clear metadata cache: ${err.message}`);
     }
   }
@@ -362,23 +293,18 @@ export class NetSuiteMCPTools {
       const accountId = await this.oauthManager.getAccountId();
       if (!accountId) return;
 
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = path.dirname(__filename);
-      const projectRoot = path.dirname(path.dirname(__dirname));
-      const cachePath = path.join(projectRoot, '.cache', accountId.toLowerCase().replace(/_/g, '-'), 'customrecord_mappings.json');
-
-      const data = await fs.readFile(cachePath, 'utf-8');
-      const mappingsObj = JSON.parse(data);
-      
-      this.customRecordMappings = new Map(Object.entries(mappingsObj));
-      console.error(`⚡ Loaded ${this.customRecordMappings.size} custom record mappings from local cache`);
+      const mappingsObj = await cacheService.get<Record<string, number>>(accountId, 'customrecord_mappings');
+      if (mappingsObj) {
+        this.customRecordMappings = new Map(Object.entries(mappingsObj));
+        console.error(`⚡ Loaded ${this.customRecordMappings.size} custom record mappings from local cache`);
+      }
     } catch {
-      // Ignore if cache file doesn't exist
+      // Ignore
     }
   }
 
   /**
-   * Fetch fresh custom record mappings from NetSuite and save to cache
+   * Fetch custom record type ID mapping from NetSuite
    */
   async fetchCustomRecordMappings() {
     if (this.hasFetchedMappings) return;
@@ -410,16 +336,10 @@ export class NetSuiteMCPTools {
           }
         }
         
-        // Save to cache file
+        // Save to cache
         const accountId = await this.oauthManager.getAccountId();
         if (accountId) {
-          const __filename = fileURLToPath(import.meta.url);
-          const __dirname = path.dirname(__filename);
-          const projectRoot = path.dirname(path.dirname(__dirname));
-          const cachePath = path.join(projectRoot, '.cache', accountId.toLowerCase().replace(/_/g, '-'), 'customrecord_mappings.json');
-          
-          await fs.mkdir(path.dirname(cachePath), { recursive: true });
-          await fs.writeFile(cachePath, JSON.stringify(newMappings, null, 2), 'utf-8');
+          await cacheService.set(accountId, 'customrecord_mappings', newMappings);
           console.error(`✅ Saved ${this.customRecordMappings.size} custom record mappings to cache`);
         }
       }

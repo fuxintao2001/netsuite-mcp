@@ -10,9 +10,12 @@ import { openBrowser } from '../utils/browserLauncher.js';
  * Handles authorization flow, token exchange, and automatic token refresh
  */
 export class OAuthManager {
-  constructor(config = {}) {
-    this.callbackPort = config.callbackPort || 8765;
-    this.storage = new SessionStorage(config.storagePath || './sessions');
+  callbackPort: any;
+  storage: any;
+  callbackServer: any;
+  constructor(config: any = {}) {
+    this.callbackPort = config.callbackPort || 8080;
+    this.storage = new SessionStorage(config.storagePath);
     this.callbackServer = new CallbackServer(this.callbackPort);
   }
 

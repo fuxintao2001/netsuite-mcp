@@ -5,6 +5,10 @@ import http from 'http';
  * Handles the redirect from NetSuite after user authentication
  */
 export class CallbackServer {
+  port: any;
+  server: any;
+  authPromiseResolve: any;
+  authPromiseReject: any;
   constructor(port) {
     this.port = port;
     this.server = null;
