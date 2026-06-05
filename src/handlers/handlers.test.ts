@@ -82,13 +82,15 @@ describe('MCP Handlers', () => {
   });
 
   describe('Prompts Handler', () => {
-    it('should register and return empty prompts list to hide from autocomplete menu', async () => {
+    it('should register and return available prompts list', async () => {
       registerPromptHandlers(mockServer, testWorkspace);
       const listHandler = toolHandlers.get(ListPromptsRequestSchema);
       expect(listHandler).toBeDefined();
 
       const result = await listHandler!();
-      expect(result.prompts).toEqual([]);
+      expect(result.prompts).toContainEqual(expect.objectContaining({
+        name: 'netsuite-sql-expert'
+      }));
     });
 
     it('should resolve prompt with dynamic memory content', async () => {
@@ -122,16 +124,16 @@ describe('MCP Handlers', () => {
       refreshCallback = jest.fn();
       resolveRectypeCallback = jest.fn().mockReturnValue(null);
 
-      registerToolHandlers(
-        mockServer,
-        mockOAuthManager,
-        mockMCPTools,
-        testWorkspace,
-        authenticateCallback,
-        logoutCallback,
-        refreshCallback,
-        resolveRectypeCallback
-      );
+      registerToolHandlers({
+        server: mockServer,
+        oauthManager: mockOAuthManager,
+        mcpTools: mockMCPTools,
+        projectRoot: testWorkspace,
+        handleAuthentication: authenticateCallback,
+        handleLogout: logoutCallback,
+        handleCacheRefresh: refreshCallback,
+        resolveCustomRecordRectype: resolveRectypeCallback
+      });
     });
 
     it('should register tools and list authenticated tools', async () => {

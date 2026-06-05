@@ -1,4 +1,4 @@
-const RECORD_URL_MAP = {
+const RECORD_URL_MAP: Record<string, string> = {
   // Entities
   'customer': '/app/common/entity/custjob.nl',
   'custjob': '/app/common/entity/custjob.nl',
@@ -65,13 +65,18 @@ const RECORD_URL_MAP = {
 
 /**
  * Generate standard NetSuite browser deep link URL
- * @param {string} accountId - NetSuite Account ID (e.g. 123456 or 123456_SB1)
- * @param {string} recordType - Record type (e.g. salesorder, customer, customrecord_...)
- * @param {string|number} recordId - Record internal ID
- * @param {number|string} [rectype] - Optional numeric ID or script ID for custom record types
- * @returns {string|null} Full URL to access record in the UI
+ * @param accountId - NetSuite Account ID (e.g. 123456 or 123456_SB1)
+ * @param recordType - Record type (e.g. salesorder, customer, customrecord_...)
+ * @param recordId - Record internal ID
+ * @param rectype - Optional numeric ID or script ID for custom record types
+ * @returns Full URL to access record in the UI, or null if required params missing
  */
-export function generateNetSuiteUrl(accountId, recordType, recordId, rectype) {
+export function generateNetSuiteUrl(
+  accountId: string | undefined,
+  recordType: string | undefined,
+  recordId: string | number | undefined,
+  rectype?: number | string
+): string | null {
   if (!accountId || !recordId) return null;
 
   // DNS-compliant formatting: replace underscores with hyphens, lowercase
@@ -81,20 +86,19 @@ export function generateNetSuiteUrl(accountId, recordType, recordId, rectype) {
   const normalizedType = recordType ? recordType.toLowerCase().replace(/[\s_-]/g, '') : '';
   const originalType = recordType ? recordType.toLowerCase().trim() : '';
 
-  let path = '';
+  let urlPath = '';
 
   if (rectype) {
-    path = `/app/common/custom/custrecordentry.nl?rectype=${rectype}&id=${recordId}`;
+    urlPath = `/app/common/custom/custrecordentry.nl?rectype=${rectype}&id=${recordId}`;
   } else if (originalType.startsWith('customrecord')) {
     // Correctly resolve custom records using their text script ID as the rectype parameter
-    path = `/app/common/custom/custrecordentry.nl?rectype=${originalType}&id=${recordId}`;
+    urlPath = `/app/common/custom/custrecordentry.nl?rectype=${originalType}&id=${recordId}`;
   } else if (RECORD_URL_MAP[normalizedType]) {
-    path = `${RECORD_URL_MAP[normalizedType]}?id=${recordId}`;
+    urlPath = `${RECORD_URL_MAP[normalizedType]}?id=${recordId}`;
   } else {
     // Fallback: transaction.nl automatically redirects standard transaction types
-    path = `/app/accounting/transactions/transaction.nl?id=${recordId}`;
+    urlPath = `/app/accounting/transactions/transaction.nl?id=${recordId}`;
   }
 
-  return `https://${formattedAccountId}.app.netsuite.com${path}`;
+  return `https://${formattedAccountId}.app.netsuite.com${urlPath}`;
 }
-

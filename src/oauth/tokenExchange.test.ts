@@ -35,7 +35,8 @@ describe('tokenExchange', () => {
         {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded'
-          }
+          },
+          timeout: 15000
         }
       );
 
@@ -101,7 +102,8 @@ describe('tokenExchange', () => {
         {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded'
-          }
+          },
+          timeout: 15000
         }
       );
 
@@ -148,7 +150,7 @@ describe('tokenExchange', () => {
           accountId: '123',
           clientId: '456'
         })
-      ).rejects.toThrow('Failed to refresh access token. Please re-authenticate.');
+      ).rejects.toThrow('Failed to refresh access token (transient). Please re-authenticate.');
     });
   });
 

@@ -5,11 +5,12 @@ import http from 'http';
  * Handles the redirect from NetSuite after user authentication
  */
 export class CallbackServer {
-  port: any;
-  server: any;
-  authPromiseResolve: any;
-  authPromiseReject: any;
-  constructor(port) {
+  private port: number;
+  private server: http.Server | null;
+  private authPromiseResolve: (() => void) | null;
+  private authPromiseReject: ((error: Error) => void) | null;
+
+  constructor(port: number) {
     this.port = port;
     this.server = null;
     this.authPromiseResolve = null;
@@ -18,11 +19,8 @@ export class CallbackServer {
 
   /**
    * Start HTTP server and wait for OAuth callback
-   * @param {string} expectedState - CSRF protection state parameter
-   * @param {Function} onCodeReceived - Callback when authorization code is received
-   * @returns {Promise<void>}
    */
-  start(expectedState, onCodeReceived) {
+  start(expectedState: string, onCodeReceived: (code: string) => Promise<void>): Promise<void> {
     return new Promise((resolve, reject) => {
       this.authPromiseResolve = resolve;
       this.authPromiseReject = reject;
@@ -33,15 +31,24 @@ export class CallbackServer {
       }
 
       this.server = http.createServer(async (req, res) => {
-        await this.handleRequest(req, res, expectedState, onCodeReceived);
+        try {
+          await this.handleRequest(req, res, expectedState, onCodeReceived);
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`⚠️ Error handling callback HTTP request: ${message}`);
+          try {
+            res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Internal Server Error');
+          } catch { /* already sent */ }
+        }
       });
 
-      this.server.on('error', (error) => {
+      this.server.on('error', (error: NodeJS.ErrnoException) => {
         if (error.code === 'EADDRINUSE') {
           console.error(`❌ Port ${this.port} is already in use.`);
           console.error(`   Please close any application using this port or change the port in config.`);
         }
-        this.authPromiseReject(error);
+        this.authPromiseReject!(error);
       });
 
       this.server.listen(this.port, () => {
@@ -52,7 +59,7 @@ export class CallbackServer {
       setTimeout(() => {
         if (this.server && this.server.listening) {
           this.close();
-          this.authPromiseReject(new Error('Authentication timeout (5 minutes)'));
+          this.authPromiseReject!(new Error('Authentication timeout (5 minutes)'));
         }
       }, 5 * 60 * 1000);
     });
@@ -61,8 +68,13 @@ export class CallbackServer {
   /**
    * Handle OAuth callback request
    */
-  async handleRequest(req, res, expectedState, onCodeReceived) {
-    const url = new URL(req.url, `http://localhost:${this.port}`);
+  private async handleRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    expectedState: string,
+    onCodeReceived: (code: string) => Promise<void>
+  ): Promise<void> {
+    const url = new URL(req.url || '/', `http://localhost:${this.port}`);
 
     if (url.pathname !== '/callback') {
       return;
@@ -76,7 +88,7 @@ export class CallbackServer {
     if (error) {
       this.sendErrorPage(res, 'Authentication Failed', error);
       this.close();
-      this.authPromiseReject(new Error(error));
+      this.authPromiseReject!(new Error(error));
       return;
     }
 
@@ -84,33 +96,34 @@ export class CallbackServer {
     if (state !== expectedState) {
       this.sendErrorPage(res, 'Invalid State', 'CSRF validation failed. Please try again.');
       this.close();
-      this.authPromiseReject(new Error('Invalid state parameter'));
+      this.authPromiseReject!(new Error('Invalid state parameter'));
       return;
     }
 
     try {
       // Exchange authorization code for tokens
-      await onCodeReceived(code);
+      await onCodeReceived(code!);
 
       this.sendSuccessPage(res);
 
       // Close server after successful auth
       setTimeout(() => {
         this.close();
-        this.authPromiseResolve();
+        this.authPromiseResolve!();
       }, 3000);
 
-    } catch (error) {
-      this.sendErrorPage(res, 'Token Exchange Failed', error.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.sendErrorPage(res, 'Token Exchange Failed', message);
       this.close();
-      this.authPromiseReject(error);
+      this.authPromiseReject!(err instanceof Error ? err : new Error(message));
     }
   }
 
   /**
    * Send success HTML page
    */
-  sendSuccessPage(res) {
+  private sendSuccessPage(res: http.ServerResponse): void {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
       <!DOCTYPE html>
@@ -130,7 +143,7 @@ export class CallbackServer {
   /**
    * Send error HTML page
    */
-  sendErrorPage(res, title, message) {
+  private sendErrorPage(res: http.ServerResponse, title: string, message: string): void {
     const statusCode = title.includes('Invalid') ? 400 : 500;
     res.writeHead(statusCode, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
@@ -152,7 +165,7 @@ export class CallbackServer {
   /**
    * Close the server
    */
-  close() {
+  close(): void {
     if (this.server) {
       this.server.close();
       this.server = null;

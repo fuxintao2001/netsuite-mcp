@@ -1,13 +1,25 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { ListPromptsRequestSchema, GetPromptRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ListPromptsRequestSchema, GetPromptRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { join } from 'path';
 import fs from 'fs/promises';
 
-export function registerPromptHandlers(server: Server, projectRoot: string) {
-  // Handle prompts listing
+export function registerPromptHandlers(server: Server, projectRoot: string): void {
+  // Handle prompts listing — declare the available prompt so clients can discover it
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
     return {
-      prompts: []
+      prompts: [
+        {
+          name: 'netsuite-sql-expert',
+          description: 'Injects SuiteQL cheat sheet and historical error context to assist with query writing.',
+          arguments: [
+            {
+              name: 'task',
+              description: 'The SQL/SuiteQL task you need help with.',
+              required: false
+            }
+          ]
+        }
+      ]
     };
   });
 
@@ -17,12 +29,13 @@ export function registerPromptHandlers(server: Server, projectRoot: string) {
       const task = request.params.arguments?.task || 'Help me write a SuiteQL query.';
       
       // Read memory file content dynamically
-      const workspace = projectRoot;
-      const memoryFilePath = join(workspace, '.gemini_sql_memory.md');
+      const memoryFilePath = join(projectRoot, '.gemini_sql_memory.md');
       let memoryContent = 'No memory file found.';
       try {
         memoryContent = await fs.readFile(memoryFilePath, 'utf-8');
-      } catch(e) {}
+      } catch {
+        // File not found — use default message
+      }
 
       return {
         messages: [
@@ -47,6 +60,6 @@ export function registerPromptHandlers(server: Server, projectRoot: string) {
         ]
       };
     }
-    throw new Error(`Prompt not found: ${request.params.name}`);
+    throw new McpError(ErrorCode.MethodNotFound, `Prompt not found: ${request.params.name}`);
   });
 }

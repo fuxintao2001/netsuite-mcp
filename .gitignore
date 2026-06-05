@@ -37,3 +37,6 @@ dist/
 .gemini_sql_memory.backup.md
 
 .npmignore
+
+# Scratch directory
+scratch/

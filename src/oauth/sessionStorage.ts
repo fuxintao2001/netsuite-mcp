@@ -1,42 +1,72 @@
 import fs from 'fs/promises';
 import path from 'path';
 
+export interface SessionData {
+  pkce?: string | null;
+  state?: string;
+  config?: {
+    accountId: string;
+    clientId: string;
+    redirectUri: string;
+  };
+  tokens?: TokenData;
+  timestamp?: number;
+  authenticated?: boolean;
+}
+
+export interface TokenData {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  expires_at: number;
+  accountId: string;
+  clientId: string;
+}
+
 /**
  * Session storage for OAuth tokens
  * Handles reading and writing session data to disk
  */
 export class SessionStorage {
-  storagePath: any;
-  sessionFile: any;
-  constructor(storagePath) {
+  private storagePath: string;
+  private sessionFile: string;
+
+  constructor(storagePath: string) {
     this.storagePath = storagePath;
     this.sessionFile = path.join(storagePath, 'session.json');
   }
 
   /**
    * Save session data to file
-   * @param {Object} data - Session data to save
    */
-  async save(data) {
+  async save(data: SessionData): Promise<void> {
     try {
       await fs.mkdir(this.storagePath, { recursive: true });
       await fs.writeFile(this.sessionFile, JSON.stringify(data, null, 2));
-    } catch (error) {
-      console.error('❌ Failed to save session:', error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('❌ Failed to save session:', message);
       throw error;
     }
   }
 
   /**
    * Load session data from file
-   * @returns {Promise<Object|null>} Session data or null if not found
    */
-  async load() {
+  async load(): Promise<SessionData | null> {
     try {
       const data = await fs.readFile(this.sessionFile, 'utf-8');
-      return JSON.parse(data);
-    } catch (error) {
-      if (error.code === 'ENOENT') {
+      try {
+        return JSON.parse(data) as SessionData;
+      } catch (parseError: unknown) {
+        const message = parseError instanceof Error ? parseError.message : String(parseError);
+        console.error(`⚠️ Session file is corrupted, clearing: ${message}`);
+        await this.clear();
+        return null;
+      }
+    } catch (error: unknown) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
         return null; // Session file doesn't exist
       }
       throw error;
@@ -46,7 +76,7 @@ export class SessionStorage {
   /**
    * Clear session file (logout)
    */
-  async clear() {
+  async clear(): Promise<void> {
     try {
       await fs.unlink(this.sessionFile);
       console.error('✅ Session cleared');
@@ -57,9 +87,8 @@ export class SessionStorage {
 
   /**
    * Check if session exists and is authenticated
-   * @returns {Promise<boolean>}
    */
-  async isAuthenticated() {
+  async isAuthenticated(): Promise<boolean> {
     try {
       const session = await this.load();
       return !!(session && session.authenticated && session.tokens);

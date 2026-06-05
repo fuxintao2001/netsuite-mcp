@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { TokenData } from './sessionStorage.js';
 
 /**
  * NetSuite OAuth token exchange utilities
@@ -6,13 +7,32 @@ import axios from 'axios';
  */
 
 /**
- * Exchange authorization code for access/refresh tokens
- * @param {string} code - Authorization code from OAuth callback
- * @param {Object} config - Configuration with accountId, clientId, redirectUri
- * @param {string} codeVerifier - PKCE code verifier
- * @returns {Promise<Object>} Token response
+ * Custom error class for token refresh failures.
+ * `recoverable` indicates whether the caller should retry or force re-authentication.
  */
-export async function exchangeCodeForTokens(code, config, codeVerifier) {
+export class TokenRefreshError extends Error {
+  readonly recoverable: boolean;
+  constructor(message: string, recoverable: boolean) {
+    super(message);
+    this.name = 'TokenRefreshError';
+    this.recoverable = recoverable;
+  }
+}
+
+interface OAuthConfig {
+  accountId: string;
+  clientId: string;
+  redirectUri: string;
+}
+
+/**
+ * Exchange authorization code for access/refresh tokens
+ */
+export async function exchangeCodeForTokens(
+  code: string,
+  config: OAuthConfig,
+  codeVerifier: string
+): Promise<TokenData> {
   const tokenUrl = `https://${config.accountId}.suitetalk.api.netsuite.com/services/rest/auth/oauth2/v1/token`;
 
   // CRITICAL: For Public Client with PKCE - all params in body, NO Authorization header
@@ -30,10 +50,11 @@ export async function exchangeCodeForTokens(code, config, codeVerifier) {
     const response = await axios.post(tokenUrl, new URLSearchParams(params), {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      },
+      timeout: 15000
     });
 
-    const tokens = {
+    const tokens: TokenData = {
       access_token: response.data.access_token,
       refresh_token: response.data.refresh_token,
       expires_in: response.data.expires_in,
@@ -45,18 +66,17 @@ export async function exchangeCodeForTokens(code, config, codeVerifier) {
     console.error('✅ Tokens obtained successfully');
     return tokens;
 
-  } catch (error) {
-    console.error('❌ Token exchange error:', error.response?.data || error.message);
-    throw new Error(`Failed to exchange authorization code: ${error.response?.status || error.message}`);
+  } catch (error: unknown) {
+    const err = error as { response?: { data?: unknown; status?: number }; message?: string };
+    console.error('❌ Token exchange error:', err.response?.data || err.message);
+    throw new Error(`Failed to exchange authorization code: ${err.response?.status || err.message}`);
   }
 }
 
 /**
  * Refresh access token using refresh token
- * @param {Object} tokens - Current tokens with refresh_token, accountId, clientId
- * @returns {Promise<Object>} New tokens
  */
-export async function refreshAccessToken(tokens) {
+export async function refreshAccessToken(tokens: TokenData): Promise<TokenData> {
   const { refresh_token, accountId, clientId } = tokens;
   const tokenUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest/auth/oauth2/v1/token`;
 
@@ -73,10 +93,11 @@ export async function refreshAccessToken(tokens) {
     const response = await axios.post(tokenUrl, new URLSearchParams(params), {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      },
+      timeout: 15000
     });
 
-    const newTokens = {
+    const newTokens: TokenData = {
       ...tokens,
       access_token: response.data.access_token,
       refresh_token: response.data.refresh_token || refresh_token,
@@ -87,18 +108,23 @@ export async function refreshAccessToken(tokens) {
     console.error('✅ Token refreshed successfully');
     return newTokens;
 
-  } catch (error) {
-    console.error('❌ Token refresh failed:', error.response?.data || error.message);
-    throw new Error('Failed to refresh access token. Please re-authenticate.');
+  } catch (error: unknown) {
+    const err = error as { response?: { data?: unknown; status?: number }; message?: string };
+    console.error('❌ Token refresh failed:', err.response?.data || err.message);
+    const status = err.response?.status;
+    // 400/401 means the refresh_token itself is invalid/expired — unrecoverable
+    const recoverable = !(status === 400 || status === 401);
+    throw new TokenRefreshError(
+      `Failed to refresh access token${recoverable ? ' (transient)' : ' (refresh token expired)'}. Please re-authenticate.`,
+      recoverable
+    );
   }
 }
 
 /**
  * Check if token needs refresh (expires in less than 5 minutes)
- * @param {Object} tokens - Tokens with expires_at field
- * @returns {boolean}
  */
-export function shouldRefreshToken(tokens) {
+export function shouldRefreshToken(tokens: TokenData): boolean {
   const timeUntilExpiry = tokens.expires_at - Date.now();
   const fiveMinutes = 5 * 60 * 1000;
   return timeUntilExpiry < fiveMinutes;

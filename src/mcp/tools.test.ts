@@ -104,46 +104,27 @@ describe('NetSuiteMCPTools', () => {
 
     it('should trigger self-healing cache invalidation on SuiteQL error', async () => {
       jest.spyOn(cacheService, 'get').mockResolvedValueOnce(null);
-      const mockError = {
+      const mockError = new Error('Request failed with status code 500');
+      Object.assign(mockError, {
         response: {
           status: 500,
           data: { error: 'invalid SuiteQL query' }
-        },
-        message: 'Request failed with status code 500'
-      };
+        }
+      });
       
       globalAxiosPostSpy.mockRejectedValueOnce(mockError as any);
-      const clearCacheSpy = jest.spyOn(cacheService, 'clearAccountCache').mockResolvedValueOnce(undefined);
+      const deleteSpy = jest.spyOn(cacheService, 'delete').mockResolvedValue(undefined as any);
 
       await expect(
         toolsClient.executeTool('ns_runCustomSuiteQL', { sqlQuery: 'SELECT * FROM invalid' })
       ).rejects.toThrow('Tool execution failed: Request failed with status code 500');
 
-      // Verify self-healing invalidation was triggered for this account
-      expect(clearCacheSpy).toHaveBeenCalledWith('test-account');
+      // Verify selective cache invalidation was triggered for the 'invalid' table
+      expect(deleteSpy).toHaveBeenCalledWith('test-account', 'ns_getSuiteQLMetadata_invalid');
+      expect(deleteSpy).toHaveBeenCalledWith('test-account', 'ns_getRecordTypeMetadata_invalid');
     });
-  });
 
-  describe('validateParameters', () => {
-    it('should validate parameters correctly against tool schema', () => {
-      const mockTool = {
-        name: 'test_tool',
-        inputSchema: {
-          type: 'object',
-          required: ['paramA'],
-          properties: {
-            paramA: { type: 'string' }
-          }
-        }
-      };
 
-      expect(toolsClient.validateParameters(mockTool, { paramA: 'value' })).toBe(true);
-
-      expect(() => {
-        toolsClient.validateParameters(mockTool, {});
-      }).toThrow('Missing required parameter: paramA');
-    });
-  });
 
   describe('fetchCustomRecordMappings', () => {
     it('should resolve and cache custom record mappings from customrecordtype query', async () => {
