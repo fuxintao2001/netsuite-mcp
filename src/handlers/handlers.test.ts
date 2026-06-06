@@ -182,6 +182,19 @@ describe('MCP Handlers', () => {
       expect(sbNames).toContain('ns_updateRecord');
     });
 
+    it('should append parallel query warning to ns_runCustomSuiteQL description', async () => {
+      mockMCPTools.fetchTools.mockResolvedValue([
+        { name: 'ns_runCustomSuiteQL', description: 'Execute a custom SuiteQL query' }
+      ]);
+      const listHandler = toolHandlers.get(ListToolsRequestSchema);
+      
+      const result = await listHandler!();
+      const customTool = result.tools.find((t: any) => t.name === 'ns_runCustomSuiteQL');
+      expect(customTool).toBeDefined();
+      expect(customTool.description).toContain('Execute a custom SuiteQL query');
+      expect(customTool.description).toContain('netsuite_run_parallel_queries');
+    });
+
     it('should require auth for parallel queries', async () => {
       mockOAuthManager.hasValidSession.mockResolvedValue(false);
       const callHandler = toolHandlers.get(CallToolRequestSchema);

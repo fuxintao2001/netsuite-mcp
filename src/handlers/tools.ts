@@ -292,7 +292,20 @@ export function registerToolHandlers(deps: ToolHandlerDeps): void {
         ? tools
         : tools.filter(t => t.name !== 'ns_createRecord' && t.name !== 'ns_updateRecord');
 
-      return { tools: [...filteredTools, ...LOCAL_TOOLS] };
+      // Enhance ns_runCustomSuiteQL description to guide parallel execution
+      const mappedTools = filteredTools.map(t => {
+        if (t.name === 'ns_runCustomSuiteQL') {
+          const originalDesc = (t.description as string) || '';
+          const suffix = '\n⚠️ CRITICAL: If you need to execute two or more independent SuiteQL queries, you MUST use the \'netsuite_run_parallel_queries\' tool to run them concurrently. Do NOT call this tool (\'ns_runCustomSuiteQL\') multiple times sequentially unless a subsequent query depends on the output of a previous one.';
+          return {
+            ...t,
+            description: originalDesc ? `${originalDesc}${suffix}` : suffix
+          };
+        }
+        return t;
+      });
+
+      return { tools: [...mappedTools, ...LOCAL_TOOLS] };
     } catch {
       return { tools: [AUTH_TOOL] };
     }
