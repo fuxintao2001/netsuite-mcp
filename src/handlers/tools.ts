@@ -11,6 +11,9 @@ import { OAuthManager } from '../oauth/manager.js';
 import { generateNetSuiteUrl } from '../utils/netsuiteUrls.js';
 import { asyncJsonParse } from '../utils/json.js';
 import { cacheService } from '../utils/cache.js';
+import { fileURLToPath } from 'url';
+import fs from 'fs/promises';
+import { join } from 'path';
 
 // ---------------------------------------------------------------------------
 // Shared helper
@@ -22,6 +25,82 @@ export function textResult(text: string, isError?: boolean): CallToolResult {
 }
 
 type ToolResponse = CallToolResult;
+
+// ---------------------------------------------------------------------------
+// Workspace checking helpers for physical isolation
+// ---------------------------------------------------------------------------
+
+function matchesAccount(defaultAuthId: string, serverAccountId: string): boolean {
+  if (!defaultAuthId || !serverAccountId) return false;
+  const normalize = (str: string) => str.toUpperCase().replace(/[-_]/g, '');
+  const normalizedServer = normalize(serverAccountId);
+  const normalizedAuth = normalize(defaultAuthId);
+
+  if (!normalizedAuth.startsWith(normalizedServer)) {
+    return false;
+  }
+
+  const serverIsSandbox = serverAccountId.toUpperCase().includes('_SB') ||
+                          serverAccountId.toUpperCase().includes('-SB') ||
+                          serverAccountId.toUpperCase().startsWith('TSTDRV');
+
+  const projectIsSandbox = defaultAuthId.toUpperCase().includes('_SB') ||
+                           defaultAuthId.toUpperCase().includes('-SB') ||
+                           defaultAuthId.toUpperCase().startsWith('TSTDRV');
+
+  if (!serverIsSandbox && projectIsSandbox) {
+    return false;
+  }
+
+  return true;
+}
+
+async function checkWorkspaceMatch(server: Server, oauthManager: OAuthManager): Promise<boolean> {
+  const accountId = (await oauthManager.getAccountId()) || process.env.NETSUITE_ACCOUNT_ID;
+  if (!accountId) return true; // Can't determine account ID, allow by default
+
+  try {
+    const rootsResult = await server.listRoots();
+    if (!rootsResult || !Array.isArray(rootsResult.roots) || rootsResult.roots.length === 0) {
+      return true; // No roots returned, fallback to allow
+    }
+
+    let hasNetSuiteWorkspace = false;
+    let hasMatchingWorkspace = false;
+
+    for (const root of rootsResult.roots) {
+      try {
+        if (root.uri.startsWith('file://')) {
+          const workspacePath = fileURLToPath(root.uri);
+          const projectJsonPath = join(workspacePath, 'project.json');
+          const projectJsonContent = await fs.readFile(projectJsonPath, 'utf-8');
+          const projectConfig = JSON.parse(projectJsonContent);
+          const defaultAuthId = projectConfig.defaultAuthId;
+
+          if (defaultAuthId) {
+            hasNetSuiteWorkspace = true;
+            if (matchesAccount(defaultAuthId, accountId)) {
+              hasMatchingWorkspace = true;
+              break;
+            }
+          }
+        }
+      } catch {
+        // Ignore file read/parse errors for this root
+      }
+    }
+
+    // If there are NetSuite workspaces open, we require at least one matching workspace.
+    // If no NetSuite workspaces are open, we allow it.
+    if (hasNetSuiteWorkspace && !hasMatchingWorkspace) {
+      return false;
+    }
+  } catch {
+    // If listRoots fails or is not supported by client, fallback to allow
+  }
+
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Dependency injection interface
@@ -143,7 +222,7 @@ async function handleStatus(
       : 'unknown';
 
     const isSandbox = sessionInfo.accountId
-      ? (sessionInfo.accountId.toUpperCase().includes('_SB') || sessionInfo.accountId.toUpperCase().startsWith('TSTDRV'))
+      ? (sessionInfo.accountId.toUpperCase().includes('_SB') || sessionInfo.accountId.toUpperCase().includes('-SB') || sessionInfo.accountId.toUpperCase().startsWith('TSTDRV'))
       : false;
     status.environment = isSandbox ? 'Sandbox/Test' : 'Production';
     status.writeOperations = isSandbox ? 'enabled' : 'disabled';
@@ -275,15 +354,31 @@ export function registerToolHandlers(deps: ToolHandlerDeps): void {
   // --- List Tools ---
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
-      const isAuthenticated = await oauthManager.hasValidSession();
-      if (!isAuthenticated) {
-        return { tools: [AUTH_TOOL, LOGOUT_TOOL] };
+      const isMatch = await checkWorkspaceMatch(server, oauthManager);
+      if (!isMatch) {
+        return { tools: [] };
       }
 
-      const accountId = await oauthManager.getAccountId();
+      const accountId = (await oauthManager.getAccountId()) || process.env.NETSUITE_ACCOUNT_ID;
       const isSandbox = accountId
-        ? (accountId.toUpperCase().includes('_SB') || accountId.toUpperCase().startsWith('TSTDRV'))
+        ? (accountId.toUpperCase().includes('_SB') || accountId.toUpperCase().includes('-SB') || accountId.toUpperCase().startsWith('TSTDRV'))
         : false;
+
+      const envSuffix = accountId
+        ? ` [Account: ${accountId}, Env: ${isSandbox ? 'Sandbox' : 'Production'}]`
+        : '';
+
+      const isAuthenticated = await oauthManager.hasValidSession();
+      if (!isAuthenticated) {
+        const unauthTools = [AUTH_TOOL, LOGOUT_TOOL].map(t => {
+          const originalDesc = (t.description as string) || '';
+          return {
+            ...t,
+            description: originalDesc ? `${originalDesc}${envSuffix}` : envSuffix
+          };
+        });
+        return { tools: unauthTools };
+      }
 
       const tools = await mcpTools.fetchTools() as Array<Record<string, unknown>>;
 
@@ -305,9 +400,31 @@ export function registerToolHandlers(deps: ToolHandlerDeps): void {
         return t;
       });
 
-      return { tools: [...mappedTools, ...LOCAL_TOOLS] };
+      const finalTools = [...mappedTools, ...LOCAL_TOOLS].map(t => {
+        const originalDesc = (t.description as string) || '';
+        return {
+          ...t,
+          description: originalDesc ? `${originalDesc}${envSuffix}` : envSuffix
+        };
+      });
+
+      return { tools: finalTools };
     } catch {
-      return { tools: [AUTH_TOOL] };
+      const accountId = (await oauthManager.getAccountId()) || process.env.NETSUITE_ACCOUNT_ID;
+      const isSandbox = accountId
+        ? (accountId.toUpperCase().includes('_SB') || accountId.toUpperCase().includes('-SB') || accountId.toUpperCase().startsWith('TSTDRV'))
+        : false;
+      const envSuffix = accountId
+        ? ` [Account: ${accountId}, Env: ${isSandbox ? 'Sandbox' : 'Production'}]`
+        : '';
+      const fallbackTools = [AUTH_TOOL].map(t => {
+        const originalDesc = (t.description as string) || '';
+        return {
+          ...t,
+          description: originalDesc ? `${originalDesc}${envSuffix}` : envSuffix
+        };
+      });
+      return { tools: fallbackTools };
     }
   });
 
@@ -317,6 +434,15 @@ export function registerToolHandlers(deps: ToolHandlerDeps): void {
     const safeArgs = (args || {}) as Record<string, unknown>;
 
     try {
+      const isMatch = await checkWorkspaceMatch(server, oauthManager);
+      if (!isMatch) {
+        const accountId = (await oauthManager.getAccountId()) || process.env.NETSUITE_ACCOUNT_ID;
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `This tool is disabled because the active workspace does not match the NetSuite account (${accountId}) for this server instance.`
+        );
+      }
+
       // --- Tools that do NOT require authentication ---
       if (name === 'netsuite_authenticate') {
         return await handleAuthentication(safeArgs);
@@ -349,7 +475,7 @@ export function registerToolHandlers(deps: ToolHandlerDeps): void {
       if (name === 'ns_createRecord' || name === 'ns_updateRecord') {
         const accountId = await oauthManager.getAccountId();
         const isSandbox = accountId
-          ? (accountId.toUpperCase().includes('_SB') || accountId.toUpperCase().startsWith('TSTDRV'))
+          ? (accountId.toUpperCase().includes('_SB') || accountId.toUpperCase().includes('-SB') || accountId.toUpperCase().startsWith('TSTDRV'))
           : false;
 
         if (!isSandbox) {

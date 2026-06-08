@@ -105,6 +105,12 @@ interface ToolHandlerDeps {
   - `ns_` prefix: NetSuite-proxied tools (routed to NetSuite REST API).
   - `netsuite_` prefix: Local tools (handled entirely within the MCP server).
 
+### 6. Workspace Physical Isolation & Environment Labeling
+- **Dynamic Suffixes:** Every tool description dynamically appends ` [Account: <accountId>, Env: <Sandbox/Production>]` during tool discovery (`list_tools`). This allows AI models to distinguish between production and sandbox environments easily.
+- **Automatic Workspace Isolation:** The server utilizes the MCP `listRoots` capability to automatically inspect open workspaces in the IDE.
+  - If a workspace contains a `project.json` (NetSuite SuiteCloud config), it extracts the project's target account ID.
+  - If the project's account ID does not match the server's account ID, the server **hides all tools** (returns `{ tools: [] }`) and **blocks tool execution** at runtime to prevent accidental cross-database/environment operations.
+
 ---
 
 ## 🧠 AI Agent Operating Procedures (SOP)
