@@ -263,6 +263,21 @@ describe('MCP Handlers', () => {
       })).rejects.toThrow('This tool is disabled because the active workspace does not match the NetSuite account');
     });
 
+    it('should bypass workspace matching check if workspace is netsuite-mcp-server-master', async () => {
+      // Setup active workspace to be netsuite-mcp-server-master
+      mockServer.listRoots.mockResolvedValue({
+        roots: [
+          { uri: 'file:///Users/fuxintao/WebstormProjects/netsuite-mcp-server-master', name: 'netsuite-mcp-server-master' }
+        ]
+      });
+
+      mockOAuthManager.getAccountId.mockResolvedValue('my-account');
+
+      const listHandler = toolHandlers.get(ListToolsRequestSchema);
+      const result = await listHandler!();
+      expect(result.tools.length).toBeGreaterThan(0);
+    });
+
     it('should require auth for parallel queries', async () => {
       mockOAuthManager.hasValidSession.mockResolvedValue(false);
       const callHandler = toolHandlers.get(CallToolRequestSchema);

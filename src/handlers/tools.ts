@@ -67,11 +67,18 @@ async function checkWorkspaceMatch(server: Server, oauthManager: OAuthManager): 
 
     let hasNetSuiteWorkspace = false;
     let hasMatchingWorkspace = false;
+    let isMasterWorkspace = false;
 
     for (const root of rootsResult.roots) {
       try {
         if (root.uri.startsWith('file://')) {
           const workspacePath = fileURLToPath(root.uri);
+
+          if (workspacePath.toLowerCase().endsWith('netsuite-mcp-server-master') || root.name?.toLowerCase() === 'netsuite-mcp-server-master') {
+            isMasterWorkspace = true;
+            break;
+          }
+
           const projectJsonPath = join(workspacePath, 'project.json');
           const projectJsonContent = await fs.readFile(projectJsonPath, 'utf-8');
           const projectConfig = JSON.parse(projectJsonContent);
@@ -88,6 +95,10 @@ async function checkWorkspaceMatch(server: Server, oauthManager: OAuthManager): 
       } catch {
         // Ignore file read/parse errors for this root
       }
+    }
+
+    if (isMasterWorkspace) {
+      return true;
     }
 
     // If there are NetSuite workspaces open, we require at least one matching workspace.
