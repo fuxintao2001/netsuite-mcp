@@ -117,6 +117,8 @@ interface ToolHandlerDeps {
 
 ### 1. NetSuite SuiteQL Rules
 
+
+- **Syntax Reference:** For detailed SuiteQL syntax specifications, Oracle SQL function usages, NetSuite built-in functions, and common query patterns, always refer to the local [SUITEQL_GUIDE.md](file://./SUITEQL_GUIDE.md) in the workspace root.
 Before executing SQL queries, you must strictly follow these rules:
 
 #### Basic Rules
