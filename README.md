@@ -23,15 +23,16 @@ NetSuite operations without leaving their IDE or CLI.
 ## Features
 
 - ✅ **OAuth 2.0 with PKCE** - Secure authentication without client secrets
-- ✅ **Automatic Token Refresh** - Tokens refresh automatically before expiration
+- ✅ **Automatic & Concurrency-Safe Token Refresh** - Tokens refresh automatically before expiration; concurrent API requests share a single refresh promise to prevent duplicate token exchange calls
 - ✅ **Environment Variable Support** - Configure credentials once in your MCP config
 - ✅ **Session Persistence** - Authentication survives server restarts
 - ✅ **Universal MCP Integration** - Works with Claude Code, Cursor IDE, Gemini CLI, and other MCP clients
 - ✅ **NetSuite MCP Tools** - Access to all NetSuite MCP capabilities (SuiteQL, Reports, Records, etc.)
 - ✅ **Modular Architecture** - Clean TypeScript codebase following single-responsibility principle
 - 🚀 **Real-time Data Cache Refresh** - Dedicated tool to trigger NetSuite REST session cache reload
-- 🔒 **Multi-Environment Isolation** - Run multiple sandbox/production accounts concurrently without database or token cross-contamination
+- 🔒 **Multi-Environment Isolation & Workspace Matching** - Run multiple sandbox/production accounts concurrently. Automatic workspace verification warns and disables business tools on mismatch to prevent cross-account accidents
 - 🛡️ **Production Safety** - Write operations (`ns_createRecord`, `ns_updateRecord`) are automatically disabled in production environments
+- 🩺 **Diagnostic Status Tool** - Built-in status check for authentication state, environment details, and cache statistics
 
 ## Quick Start
 
@@ -253,7 +254,8 @@ netsuite-mcp-server/
 | `netsuite_logout` | Clear authentication session |
 | `netsuite_refresh_cache` | Force clear local + NetSuite REST session cache |
 | `netsuite_get_record_link` | Generate a clickable NetSuite UI link for a record |
-| `netsuite_run_parallel_queries` | Execute up to 5 SuiteQL queries concurrently |
+| `netsuite_run_parallel_queries` | Execute up to 5 SuiteQL queries concurrently (highly recommended for independent queries) |
+| `netsuite_status` | Show diagnostic information (auth state, token expiry, environment, cache stats) |
 
 ### NetSuite Proxied Tools (`ns_` prefix)
 
@@ -325,6 +327,13 @@ Run multiple NetSuite environments concurrently with isolated sessions:
 This guarantees:
 1. **No Session Collision**: OAuth flows and tokens are stored separately.
 2. **Data Quarantine**: Processes run on strict account scopes and cannot access other databases.
+
+### Workspace-Based Safety Isolation
+To prevent accidental cross-account or cross-environment operations when working in an IDE:
+- The server automatically inspects open workspaces via the MCP `listRoots` capability.
+- If a workspace contains a `project.json` (NetSuite SuiteCloud config), the server extracts its `defaultAuthId`.
+- If the project's target account ID does not match the active NetSuite session's account ID, the server **hides all business tools** (allowing only administrative tools like `netsuite_authenticate`, `netsuite_logout`, and `netsuite_status`) and **blocks tool execution** at runtime.
+- A clear warning is appended to the description of the remaining administrative tools in the tool list to notify you.
 
 ## OAuth Flow
 

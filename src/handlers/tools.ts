@@ -366,10 +366,6 @@ export function registerToolHandlers(deps: ToolHandlerDeps): void {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
       const isMatch = await checkWorkspaceMatch(server, oauthManager);
-      if (!isMatch) {
-        return { tools: [] };
-      }
-
       const accountId = (await oauthManager.getAccountId()) || process.env.NETSUITE_ACCOUNT_ID;
       const isSandbox = accountId
         ? (accountId.toUpperCase().includes('_SB') || accountId.toUpperCase().includes('-SB') || accountId.toUpperCase().startsWith('TSTDRV'))
@@ -378,6 +374,18 @@ export function registerToolHandlers(deps: ToolHandlerDeps): void {
       const envSuffix = accountId
         ? ` [Account: ${accountId}, Env: ${isSandbox ? 'Sandbox' : 'Production'}]`
         : '';
+
+      if (!isMatch) {
+        const warningSuffix = `\n⚠️ [工作空间不匹配警告] 由于当前工作空间的 NetSuite 账户配置与服务器登录账号 (${accountId}) 不一致，除管理工具外，所有 NetSuite 业务工具均已隐藏以防跨环境误操作。您可以通过 netsuite_authenticate 重新登录正确账户。`;
+        const adminTools = [AUTH_TOOL, LOGOUT_TOOL, STATUS_TOOL].map(t => {
+          const originalDesc = (t.description as string) || '';
+          return {
+            ...t,
+            description: originalDesc ? `${originalDesc}${warningSuffix}${envSuffix}` : `${warningSuffix}${envSuffix}`
+          };
+        });
+        return { tools: adminTools };
+      }
 
       const isAuthenticated = await oauthManager.hasValidSession();
       if (!isAuthenticated) {
@@ -446,11 +454,12 @@ export function registerToolHandlers(deps: ToolHandlerDeps): void {
 
     try {
       const isMatch = await checkWorkspaceMatch(server, oauthManager);
-      if (!isMatch) {
+      const isAdministrativeTool = name === 'netsuite_authenticate' || name === 'netsuite_logout' || name === 'netsuite_status';
+      if (!isMatch && !isAdministrativeTool) {
         const accountId = (await oauthManager.getAccountId()) || process.env.NETSUITE_ACCOUNT_ID;
         throw new McpError(
           ErrorCode.InvalidRequest,
-          `This tool is disabled because the active workspace does not match the NetSuite account (${accountId}) for this server instance.`
+          `This tool (${name}) is disabled because the active workspace does not match the NetSuite account (${accountId}) for this server instance.`
         );
       }
 

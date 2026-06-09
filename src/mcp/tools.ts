@@ -296,7 +296,7 @@ export class NetSuiteMCPTools {
       // --- 401 retry: force-refresh token and try once more ---
       if (axiosErr.response?.status === 401) {
         console.error('🔄 [401 Retry] Force-refreshing token and retrying...');
-        accessToken = await this.oauthManager.forceRefreshToken();
+        accessToken = await this.oauthManager.forceRefreshToken(accessToken);
         return await makeRequest(accessToken);
       }
 

@@ -39,3 +39,6 @@ dist/
 
 # Scratch directory
 scratch/
+
+# Local custom script
+keep-alive.mjs

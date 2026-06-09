@@ -214,7 +214,11 @@ describe('MCP Handlers', () => {
 
       const listHandler = toolHandlers.get(ListToolsRequestSchema);
       const result = await listHandler!();
-      expect(result.tools).toEqual([]);
+      const names = result.tools.map((t: any) => t.name);
+      expect(names).toContain('netsuite_authenticate');
+      expect(names).toContain('netsuite_logout');
+      expect(names).toContain('netsuite_status');
+      expect(names).not.toContain('ns_getRecord');
     });
 
     it('should show tools if workspace account matches', async () => {
@@ -260,7 +264,7 @@ describe('MCP Handlers', () => {
           name: 'ns_getRecord',
           arguments: { recordType: 'customer', id: '100' }
         }
-      })).rejects.toThrow('This tool is disabled because the active workspace does not match the NetSuite account');
+      })).rejects.toThrow('is disabled because the active workspace does not match the NetSuite account');
     });
 
     it('should bypass workspace matching check if workspace is netsuite-mcp-server-master', async () => {
@@ -276,6 +280,34 @@ describe('MCP Handlers', () => {
       const listHandler = toolHandlers.get(ListToolsRequestSchema);
       const result = await listHandler!();
       expect(result.tools.length).toBeGreaterThan(0);
+    });
+
+    it('should allow administrative tool calls even if workspace account mismatch', async () => {
+      // Setup active workspace to target a different account
+      mockServer.listRoots.mockResolvedValue({
+        roots: [
+          { uri: `file://${testWorkspace}`, name: 'test' }
+        ]
+      });
+
+      // Write a project.json for a mismatching account
+      await fs.writeFile(
+        path.join(testWorkspace, 'project.json'),
+        JSON.stringify({ defaultAuthId: 'different-account-Adm-Sand' })
+      );
+
+      mockOAuthManager.getAccountId.mockResolvedValue('my-account');
+
+      const callHandler = toolHandlers.get(CallToolRequestSchema);
+      
+      // Call administrative tool - should not throw mismatch error
+      await callHandler!({
+        params: {
+          name: 'netsuite_status',
+          arguments: {}
+        }
+      });
+      expect(mockOAuthManager.hasValidSession).toHaveBeenCalled();
     });
 
     it('should require auth for parallel queries', async () => {

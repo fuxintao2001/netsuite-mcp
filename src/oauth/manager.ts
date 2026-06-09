@@ -27,6 +27,8 @@ export class OAuthManager {
   private storage: SessionStorage;
   private callbackServer: CallbackServer;
   private tokenRefreshScheduler: TokenRefreshScheduler;
+  private refreshPromise: Promise<string> | null = null;
+  private refreshingToken: string | null = null;
 
   constructor(config: OAuthManagerConfig = {}) {
     this.callbackPort = config.callbackPort || 8080;
@@ -137,6 +139,34 @@ export class OAuthManager {
   }
 
   /**
+   * Helper to execute a token refresh with a single shared promise to prevent concurrent duplication
+   */
+  private async executeTokenRefresh(session: any, tokenToRefresh: string): Promise<string> {
+    this.refreshingToken = tokenToRefresh;
+    this.refreshPromise = (async () => {
+      try {
+        const newTokens = await refreshAccessToken(session.tokens);
+        await this.storage.save({
+          ...session,
+          tokens: newTokens
+        });
+        return newTokens.access_token;
+      } catch (error: unknown) {
+        if (error instanceof TokenRefreshError && !error.recoverable) {
+          console.error('🔒 Refresh token expired — clearing invalid session');
+          await this.clearSession();
+        }
+        throw error;
+      } finally {
+        this.refreshPromise = null;
+        this.refreshingToken = null;
+      }
+    })();
+
+    return this.refreshPromise;
+  }
+
+  /**
    * Ensure token is valid, auto-refresh if expiring soon
    */
   async ensureValidToken(): Promise<string> {
@@ -146,26 +176,14 @@ export class OAuthManager {
       throw new Error('Not authenticated. Please run authentication first.');
     }
 
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
     // Refresh if expiring in < 5 minutes
     if (shouldRefreshToken(session.tokens)) {
       console.error('⚠️  Token expiring soon, refreshing...');
-      try {
-        const newTokens = await refreshAccessToken(session.tokens);
-
-        await this.storage.save({
-          ...session,
-          tokens: newTokens
-        });
-
-        return newTokens.access_token;
-      } catch (error: unknown) {
-        // If the refresh token itself is expired/invalid, clear the broken session
-        if (error instanceof TokenRefreshError && !error.recoverable) {
-          console.error('🔒 Refresh token expired — clearing invalid session');
-          await this.clearSession();
-        }
-        throw error;
-      }
+      return this.executeTokenRefresh(session, session.tokens.access_token);
     }
 
     return session.tokens.access_token;
@@ -174,27 +192,27 @@ export class OAuthManager {
   /**
    * Force refresh the access token (used by retry logic after 401)
    */
-  async forceRefreshToken(): Promise<string> {
+  async forceRefreshToken(failedToken?: string): Promise<string> {
     const session = await this.storage.load();
     if (!session || !session.tokens) {
       throw new Error('Not authenticated. Please run authentication first.');
     }
 
-    console.error('🔄 Force-refreshing access token...');
-    try {
-      const newTokens = await refreshAccessToken(session.tokens);
-      await this.storage.save({
-        ...session,
-        tokens: newTokens
-      });
-      return newTokens.access_token;
-    } catch (error: unknown) {
-      if (error instanceof TokenRefreshError && !error.recoverable) {
-        console.error('🔒 Refresh token expired — clearing invalid session');
-        await this.clearSession();
-      }
-      throw error;
+    const currentToken = session.tokens.access_token;
+
+    // If the token was already refreshed by another concurrent request, return it immediately
+    if (failedToken && currentToken !== failedToken) {
+      console.error('🔄 Token was already refreshed by another request.');
+      return currentToken;
     }
+
+    // If a refresh is already in progress, wait for it
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    console.error('🔄 Force-refreshing access token...');
+    return this.executeTokenRefresh(session, currentToken);
   }
 
   /**
