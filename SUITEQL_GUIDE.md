@@ -2,6 +2,24 @@
 
 This document serves as the official reference for writing SuiteQL queries in this project. SuiteQL is based on a subset of **Oracle SQL** syntax.
 
+## 0. Official Documentation & Core Syntax Rules
+For complete, authoritative Oracle NetSuite documentation on SuiteQL syntax, functions, and limitations, refer to the following official resources:
+
+### Official Oracle Help Center SuiteQL Sections:
+*   📖 **[SuiteQL Overview](https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_156257770590.html)** — Core guide on leveraging SuiteQL in NetSuite.
+*   ✏️ **[SuiteQL Syntax and Examples](https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_156257791851.html)** — Syntax structure, parameters (`?`), joins, and subselection rules.
+*   ✅ **[SuiteQL Supported and Unsupported Functions](https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_156257799794.html)** — Detailed list of standard SQL functions allowed in queries.
+*   ⚙️ **[SuiteQL Supported Built-in Functions](https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_156257816823.html)** — Rules for NetSuite-specific built-in functions (e.g. `BUILTIN.DF`, `BUILTIN.CONSOLIDATE`).
+
+### Metadata & Schema Discovery:
+*   📊 **NetSuite Records Catalog**: Access via your NetSuite UI path: `/app/recordscatalog/rcanalytics.nl` (*Setup > Records Catalog*). This is the authoritative source for the **SuiteAnalytics Workbook / NetSuite2.com** schema used by SuiteQL.
+*   🌐 **[NetSuite Records Browser](https://system.netsuite.com/help/helpcenter/en_US/sdo/sdo_index.html)** — Classic schema reference (note: SuiteQL uses NetSuite2.com analytics schema, which may differ slightly from the classic records browser).
+
+### Core Rules from Official Docs:
+*   **Preferred Syntax**: Always prefer **Oracle SQL syntax** over SQL-92. While ANSI SQL-92 is supported, it carries a higher risk of performance issues (such as timeouts) when converted internally.
+*   **No Mixing**: You can use either SQL-92 or Oracle SQL syntax, but **you cannot mix them in the same query**.
+*   **Case Sensitivity**: Table and column names in results may vary in casing depending on the NetSuite release version. Do not build business logic that relies on specific output casing.
+
 ---
 
 ## 1. Core SELECT & JOIN Syntax
